@@ -6,4 +6,9 @@ title = 'Api Versioning'
 
 ## Introduction
 
-Test content
+
+
+## talking points
+
+- The initial design & the refactor
+- Tradeoffs to compile time assetion and panicking
