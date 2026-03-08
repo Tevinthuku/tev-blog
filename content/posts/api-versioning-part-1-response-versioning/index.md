@@ -1,6 +1,6 @@
 +++
-date = '2026-03-01T18:07:20+03:00'
-draft = true
+date = '2026-03-08T13:45:20+03:00'
+draft = false
 title = 'Api Versioning: Part 1 - Response versioning'
 +++
 
@@ -160,7 +160,7 @@ Step From impl required When it runs
 
 Notice that each From converts from the immediately preceding type in the chain, not from `Head`. The transformations are applied sequentially: to reach `CollapseUserAddressToSingleString`, the framework first downgrades `User` into `CollapseUserAddressesToStrings`, then downgrades that result into `CollapseUserAddressToSingleString`.
 
-See -> https://github.com/Tevinthuku/version-api/blob/main/version-api-macros/src/derive_change_history.rs for the full implementation.
+See the [full implementation](https://github.com/Tevinthuku/version-api/blob/main/version-api-macros/src/derive_change_history.rs).
 
 ### 5. Wire it up
 
@@ -195,6 +195,16 @@ HttpServer::new(move || {
 Now when a consumer sends X-API-Version: 1.0.0, they get { "name": "Jane Doe" }. A consumer on 2.0.0 (or with no header) gets { "first_name": "Jane", "last_name": "Doe" }. Your handler code stays the same either way.
 
 #### Internals
+
+#### A different take on organizing version changes
+
+Stripe groups all changes across all resources into a single master list keyed by version date. A single version entry can contain Changes [for all sorts of objects](https://stripe.com/blog/api-versioning).
+
+This library takes the opposite approach: changes are organized per resource. Each `ChangeHistory` declaration captures the complete transformation chain for a single response type — from its current shape all the way back to its oldest supported form. A developer looking at UserResponseHistoryVersions immediately sees every shape User has ever taken and in what order, without sifting through unrelated changes to other types.
+
+This should make debugging more straightforward. When a response comes back with unexpected data, you look at the single `ChangeHistory` for that resource, walk the chain, and pinpoint exactly which `From` conversion produced the wrong output — rather than scanning a global changelog for the entries that happen to touch your type. The ApiResponseResourceRegistry does hold all change histories for all resources at runtime, but that's a runtime dispatch detail — at the code level, each resource's transformation logic lives in one place.
+
+The only globally shared definition is the ApiVersion enum (annotated with #[derive(ApiVersionId)]), which acts as the single source of truth for which versions your application supports. Everything else — the change types, the From conversions, the ChangeHistory declaration — is scoped to the resource it belongs to.
 
 #### How ApiResponseResourceRegistry works
 
@@ -258,6 +268,8 @@ This experience reinforced something I think is important when building with LLM
 
 ### Next steps
 
-1. Request transformation (Part 2): This post focused on response downgrading — transforming the latest response shape into what older clients expect. Part 2 will tackle the other direction: request upgrading. When a client on an older API version sends a request body (or query parameters), the framework will transform it forward through the version chain so your handler always receives the latest shape. Same idea, reverse direction.
+1. **Request transformation (Part 2):** This post focused on response downgrading — transforming the latest response shape into what older clients expect. Part 2 will tackle the other direction: request upgrading. When a client on an older API version sends a request body (or query parameters), the framework will transform it forward through the version chain so your handler always receives the latest shape. Same idea, reverse direction.
 
-2. Error handling overhaul: The current error handling leans on Box<dyn std::error::Error> and std::io::Error as catch-all wrappers, which isn't great for debuggability or for consumers matching on specific failure cases. I plan to introduce a dedicated error type that makes it clear whether a failure came from version validation, transformation, serialization, or registration.
+2. **Error handling overhaul:** The current error handling leans on Box<dyn std::error::Error> and std::io::Error as catch-all wrappers, which isn't great for debuggability or for consumers matching on specific failure cases. I plan to introduce a dedicated error type that makes it clear whether a failure came from version validation, transformation, serialization, or registration.
+
+3. **Opt-in tracing** — when a response passes through a chain of transformers, things can go wrong in ways that are hard to diagnose. Adding optional tracing support would let developers inspect the full transformation pipeline: which version was requested, which transformers ran, and what the intermediate shapes looked like. Spans would default to `debug` level to keep production logs clean, unless explicitly configured otherwise.
