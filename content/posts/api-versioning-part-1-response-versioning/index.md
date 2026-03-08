@@ -73,8 +73,10 @@ async fn get_user(id: web::Path<String>) -> Result<VersionedJsonResponder<Curren
 
 ##### Internals
 
-`VersionedJsonResponder` implements Actix-web's Responder trait, so it plugs directly into any handler return type. It wraps your response model and handles API versioning automatically at response time.
-Your handler always returns the latest model. When the response goes out, `VersionedJsonResponder` checks the client's API version using a `VersionIdExtractor` (more on this later), looks up any registered downgrade transforms, applies them if needed, and serializes the result to JSON.
+`VersionedJsonResponder` implements Actix-web's `Responder` [trait](https://docs.rs/actix-web/latest/actix_web/trait.Responder.html), so it plugs directly into any handler return type. It wraps your response model and handles API versioning automatically at response time.
+Your handler always returns the latest model.
+
+When the response goes out, `VersionedJsonResponder` checks the client's API version using a `VersionIdExtractor` (more on this later), looks up any registered downgrade transforms, applies them if needed, and serializes the result to JSON.
 If the client is on the latest version (or if no versionId is provided, eg: if version header is missing), nothing happens -- the model is returned as-is.
 It keeps version logic out of your handlers entirely.
 
@@ -95,7 +97,7 @@ use version_core::{
 struct CurrentUserResponseHistory;
 ```
 
-This reads as: "The head (latest) shape is CurrentUser. For any version below 2.0.0, downgrade it to UserWithSingleNameField."
+This reads as: "The head (latest) shape is `CurrentUser`. For any version below `2.0.0`, downgrade it to `UserWithSingleNameField`."å
 
 ### 4. Implement the downgrade
 
@@ -122,15 +124,15 @@ impl From<CurrentUser> for UserWithSingleNameField {
 
 ##### Internals
 
-#[derive(ChangeHistory)] constructs a sequential transformation chain from newer response shapes to older ones. The chain starts at the #[head] type (the latest version of your response) and walks through each entry in #[changes], in order:
+`#[derive(ChangeHistory)]` constructs a sequential transformation chain from newer response shapes to older ones. The chain starts at the `#[head]` type (the latest version of your response) and walks through each entry in `#[changes]`, in order:
 
 ```bash
 Head → Change₁ → Change₂ → … → Changeₙ
 ```
 
-Each arrow represents a single downgrade step. For every adjacent pair in the chain, the macro generates a hidden struct that implements VersionChangeTransformer. That struct's transform method simply calls From::from to convert the left type into the right type. This means you must provide a From implementation for every adjacent pair in the chain.
+Each arrow represents a single downgrade step. For every adjacent pair in the chain, the macro generates a hidden struct that implements `VersionChangeTransformer`. That struct's transform method simply calls `From::from` to convert the left type into the right type. This means you must provide a From implementation for every adjacent pair in the chain.
 
-If any From implementation is missing, you will get a compile-time error — the macro emits a From<A> for B assertion for every adjacent pair, so the Rust compiler catches omissions before your code ever runs.
+If any From implementation is missing, you will get a compile-time error — the macro emits a `From<A> for B` assertion for every adjacent pair, so the Rust compiler catches omissions before your code ever runs.
 
 Example:
 
@@ -152,8 +154,6 @@ User → CollapseUserAddressesToStrings → CollapseUserAddressToSingleString
 
 So you need exactly two From implementations — one per arrow:
 
-Step From impl required When it runs
-
 1 `From<User> for CollapseUserAddressesToStrings` Client requests a version below V2_0_0 (e.g. V1_0_0, V0_9_0)
 
 2 `From<CollapseUserAddressesToStrings> for CollapseUserAddressToSingleString` Client requests a version below V1_0_0 (e.g. V0_9_0)
@@ -164,7 +164,7 @@ See the [full implementation](https://github.com/Tevinthuku/version-api/blob/mai
 
 ### 5. Wire it up
 
-Register the change history and tell the framework / actix in this case how to extract the version from incoming requests (here, from an X-API-Version header):
+Register the change history and tell the framework / actix in this case how to extract the version from incoming requests (here, its from an `X-API-Version` header):
 
 ```rust
 let mut registry = ApiResponseResourceRegistry::new();
@@ -216,39 +216,44 @@ This library takes the opposite approach: changes are organized per resource. Ea
 
 This should make debugging more straightforward. When a response comes back with unexpected data, you look at the single `ChangeHistory` for that resource, walk the chain, and pinpoint exactly which `From` conversion produced the wrong output — rather than scanning a global changelog for the entries that happen to touch your type. The ApiResponseResourceRegistry does hold all change histories for all resources at runtime, but that's a runtime dispatch detail — at the code level, each resource's transformation logic lives in one place.
 
-The only globally shared definition is the ApiVersion enum (annotated with #[derive(ApiVersionId)]), which acts as the single source of truth for which versions your application supports. Everything else — the change types, the From conversions, the ChangeHistory declaration — is scoped to the resource it belongs to.
+The only globally shared definition is the ApiVersion enum (annotated with `#[derive(ApiVersionId)]`), which acts as the single source of truth for which versions your application supports. Everything else — the change types, the From conversions, the `ChangeHistory` declaration — is scoped to the resource it belongs to.
 
 #### How ApiResponseResourceRegistry works
 
-ApiResponseResourceRegistry is the runtime lookup table at the heart of the versioning system. It maps (head type, version) pairs to transformers — the downgrade steps generated by ChangeHistory.
+`ApiResponseResourceRegistry` is the runtime lookup table that ties everything together. Think of it as a two-level map:
+
+1. **First, it looks up the response type** — when your handler returns a `CurrentUser`, the registry uses its `TypeId` to find all the transformers registered for that type.
+2. **Then, it walks the version chain** — it sorts the transformers by version (newest first) and applies every transformer whose version is _above_ the client's pinned version, in sequence.
+
+For example, if a client is pinned to `1.0.0` and there's a transformer registered at `2.0.0`, that transformer runs — it converts `CurrentUser` into `UserWithSingleNameField`. If the client is on `2.0.0` or later, no transformers match and the response passes through unchanged.
 
 #### Registration
 
 When you call `YourChangeHistory::register(&mut registry)`, the macro-generated code registers each transformer keyed by two things:
 
-The `TypeId` of the head type (e.g. User) — so the registry knows which transformers apply to which response type.
-The VersionId from the below(...) annotation — so the registry knows at which version boundary each transformer kicks in.
+The `TypeId` of the head type (e.g. `User`) — so the registry knows which transformers apply to which response type.
+The `VersionId` from the `below(...)` annotation — so the registry knows at which version boundary each transformer kicks in.
 This means a single registry can hold change histories for many different response types side by side, each isolated by their head type's `TypeId`.
 
 ##### Version extraction in actix
 
 There are two key abstractions that work together to resolve which API version a client is requesting:
 
-`ActixVersionIdExtractor` — a trait responsible for pulling a version identifier out of an incoming HttpRequest. How the version is determined is entirely up to the implementation. The trait returns Option<VersionId>: Some if the client specified a version, None if they didn't (in which case the response is returned as-is, untransformed).
+`ActixVersionIdExtractor` — a trait responsible for pulling a version identifier out of an incoming HttpRequest. How the version is determined is entirely up to the implementation. The trait returns `Option<VersionId>`: Some if the client specified a version, None if they didn't (in which case the response is returned as-is, untransformed).
 
-`VersionIdValidator` — a trait responsible for parsing and validating a raw version string (e.g. "2.0.0") into a VersionId. It rejects anything that doesn't correspond to a version your application has defined. When you derive ApiVersionId on your versions enum, a validator is auto-generated and available via YourEnum::validator().
+`VersionIdValidator` — a trait responsible for parsing and validating a raw version string (e.g. "2.0.0") into a `VersionId newtype`. It rejects anything that doesn't correspond to a version your application has defined. When you derive ApiVersionId on your versions enum, a validator is auto-generated and available via YourEnum::validator().
 
 ##### The built-in extractor
 
-`BaseActixVersionIdExtractor` is the provided implementation of ActixVersionIdExtractor. It covers the straightforward case: the client sends the desired version in an HTTP header on every request (e.g. X-API-Version: 1.0.0). It reads the header, passes the raw value through the VersionIdValidator, and returns the result.
+`BaseActixVersionIdExtractor` is the provided implementation of `ActixVersionIdExtractor`. It covers the straightforward case: the client sends the desired version in an HTTP header on every request (e.g. X-API-Version: 1.0.0). It reads the header, passes the raw value through the VersionIdValidator, and returns the result.
 
 ##### Custom extractors
 
-Consumers can implement their own ActixVersionIdExtractor for more complex scenarios. For example, Stripe pins an API version to the user's account rather than sending it per-request. To support this pattern, you might write a middleware that resolves the account's pinned version and attaches it to the request extensions, then write a custom extractor that reads from those extensions instead of a header.
+Consumers can implement their own `ActixVersionIdExtractor` for more complex scenarios. For example, Stripe pins an API version to the user's account rather than sending it per-request. To support this pattern, you might write a middleware that resolves the account's pinned version and attaches it to the request extensions, then write a custom extractor that reads from those extensions instead of a header.
 
 ##### VersionedJsonResponder ties it all together
 
-`VersionedJsonResponder` is the glue. When building a response, it pulls whatever `ActixVersionIdExtractor` has been registered in actix's app_data, calls extract on the request, and — if a version was returned — hands the value off to the ApiResponseResourceRegistry to walk the downgrade chain. It has no knowledge of which extractor is being used or how the version was determined. You swap the strategy simply by registering a different extractor in app_data, keeping the entire system extensible without touching the responder.
+`VersionedJsonResponder` is the glue. When building a response, it pulls whatever `ActixVersionIdExtractor` has been registered in actix's app_data, calls extract on the request, and — if a version was returned — hands the value off to the `ApiResponseResourceRegistry` to walk the downgrade chain. It has no knowledge of which extractor is being used or how the version was determined. You swap the strategy simply by registering a different extractor in app_data, keeping the entire system extensible without touching the responder.
 
 ### A note on the initial API design
 
@@ -271,12 +276,12 @@ struct User { name: String, addresses: Vec<String> }
 
 I pushed back on this design for one key reason:
 
-The mapping "v2" => UserWithNameOnly is ambiguous — does it mean consumers on `v2` receive `UserWithNameOnly`, or consumers below `v2`? I wanted the latter, but the syntax reads like the former. An API's ergonomics matter, and if the person reading the macro has to pause and wonder which interpretation is correct, the design isn't clear enough.
+The mapping `"v2" => UserWithNameOnly` is ambiguous — does it mean consumers on `v2` receive `UserWithNameOnly`, or consumers below `v2`? I wanted the latter, but the syntax reads like the former. An API's ergonomics matter, and if the person reading the macro has to pause and wonder which interpretation is correct, the design isn't clear enough.
 When I raised this concern, the model doubled down and insisted this was the best approach. I dropped the conversation, stepped away from the repo for a few days, and when I came back with fresh eyes, the `below(ApiVersion::V2_0_0) => UserWithSingleNameField` syntax clicked for me — it removes the ambiguity entirely.
 
-Stay in the driver's seat
+**Stay in the driver's seat**
 
-This experience reinforced something I think is important when building with LLMs: you have to stay in the driver's seat. Models can now be remarkably persuasive — and when they stick to their guns, it's tempting to just go along with it. But the developer is the one who has to live with the design, maintain the code, and answer to the users. If something feels off, trust that instinct. Push back, explore alternatives, and don't let the model's confidence substitute for your own judgment.
+I'm not saying my design is perfect, but experience reinforced something I think is important when building with LLMs: you have to stay in the driver's seat. Models can now be remarkably persuasive — and when they stick to their guns, it's tempting to just go along with it. But the developer is the one who has to live with the design, maintain the code, and answer to the users. If something feels off, trust that instinct. Push back, explore alternatives, and don't let the model's confidence substitute for your own judgment.
 
 ### Next steps
 
