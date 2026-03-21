@@ -51,7 +51,13 @@ The request handler stays simple: it always expects the latest model.
 async fn create_user(
     user: VersionedJsonRequest<CreateUserRequest>,
 ) -> Result<VersionedJsonResponder<CreateUserResponse>> {
-    ...
+    let user = user.into_inner();
+    Ok(VersionedJsonResponder(CreateUserResponse {
+        first_name: user.first_name,
+        last_name: user.last_name,
+        status: "created".to_string(),
+    }))
+}
 ```
 
 `VersionedJsonRequest` works similarly to `VersionedJsonResponder` from Part 1. While writing this, I realized both request and response wrappers could likely be unified into one type (similar to [web::Json](https://docs.rs/actix-web/latest/actix_web/web/struct.Json.html)). I plan to refactor that later, but the core concept stays the same.
