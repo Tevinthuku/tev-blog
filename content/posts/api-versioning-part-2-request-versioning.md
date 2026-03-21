@@ -4,15 +4,15 @@ draft = true
 title = 'Api Versioning: Part 2 - Request versioning'
 +++
 
-This is just going to be a continuation of the [previous blog](https://tevinthuku.github.io/tev-writes/posts/api-versioning-part-1-response-versioning/)
+This post is a continuation of [Part 1 on response versioning](../api-versioning-part-1-response-versioning/).
 
-The key insight is, for requests, the transformer operations happen in reverse.
+The key insight is that request transformers run in reverse.
 
-Users will provide an old model, the library upgrades this model to what the route handler expects.
+Clients can send an older request model, and the library upgrades it to the model the route handler expects.
 
-As a small example, lets assume we had a user creation endpoint. `/users`
+As a small example, assume we have a user-creation endpoint: `/users`.
 
-In version 0.5 -> It accepts a `name` field
+In version `0.5`, the endpoint accepts a `name` field:
 
 ```rust
 #[derive(Debug, Serialize, Deserialize, VersionChange)]
@@ -22,7 +22,7 @@ pub struct LegacyCreateUserRequestV0_5 {
 }
 ```
 
-in version 1.0 -> It accepts a `full_name` field instead of name, users can then split their 2 names via a whitespace
+In version `1.0`, it accepts a `full_name` field instead of `name`:
 
 ```rust
 #[derive(Debug, Serialize, Deserialize, VersionChange)]
@@ -32,7 +32,7 @@ pub struct LegacyCreateUserRequestV1 {
 }
 ```
 
-In version 2.0 -> The API finally performs a proper name split and provides 2 fields `first_name` and `last_name`
+For the latest model, the API expects a proper split and takes two fields: `first_name` and `last_name`.
 
 ```rust
 // the latest model
@@ -44,7 +44,7 @@ pub struct CreateUserRequest {
 }
 ```
 
-Our request handler will be simple, it will always expect the latest model
+The request handler stays simple: it always expects the latest model.
 
 ```rust
 #[post("/users")]
@@ -54,18 +54,19 @@ async fn create_user(
     ...
 ```
 
-The `VersionedJsonRequest` is just similar to the `VersionedJsonResponder` that we covered in the previous post. As I write this, I see we could just use a single struct for both Request & Response, similar to [web::Json](https://docs.rs/actix-web/latest/actix_web/web/struct.Json.html), but I'll refactor this at a different point in time. However, the concept will still remain the same.
-The `VersionJsonRequest` extracts the version-id provided and forwards the request body to the latest version.
+`VersionedJsonRequest` works similarly to `VersionedJsonResponder` from Part 1. While writing this, I realized both request and response wrappers could likely be unified into one type (similar to [web::Json](https://docs.rs/actix-web/latest/actix_web/web/struct.Json.html)). I plan to refactor that later, but the core concept stays the same.
 
-1 more thing, we now have a demo service that handles this.
+`VersionedJsonRequest` extracts the provided version ID and upgrades the request body to the latest model before it reaches the handler.
 
-[Service-source code](https://github.com/Tevinthuku/version-api/tree/main/version-actix-roundtrip-example)
+One more thing: there is now a demo service that handles this flow end-to-end.
+
+[Service source code](https://github.com/Tevinthuku/version-api/tree/main/version-actix-roundtrip-example)
 
 [https://version-api-11g3.onrender.com](https://version-api-11g3.onrender.com)
 
-How to test this, keep in mind the service is deployed on the free plan, so it needs time to boot up first.
+To test this, keep in mind the service runs on a free plan and may need time to boot on the first request.
 
-version 0.5.0
+Version `0.5.0`: apart from the request-change, the response includes a `success` boolean field.
 
 ```bash
 curl -sS \
@@ -76,7 +77,7 @@ curl -sS \
 {"name":"Alice Doe","success":true}%
 ```
 
-version 1.0.0
+Version `1.0.0`: apart from the request changes, the response now uses a `status` field instead of `success`.
 
 ```bash
 curl -sS \
@@ -87,7 +88,7 @@ curl -sS \
 {"full_name":"Alice Doe","status":"created"}%
 ```
 
-version 2.0.0
+Version `2.0.0`
 
 ```bash
 curl -sS \
@@ -98,7 +99,8 @@ curl -sS \
 {"first_name":"Alice", "last_name": "Doe", "status":"created"}%
 ```
 
-The service is a full roundtrip example where both request and response's versions are respected so user clients do not break.
+This service is a full roundtrip example where both request and response versions are respected, so existing clients do not break.
 
-The last bit I'll work on is error handling. I have a number of todo! comments all over the repo for fixing the error handling. It would be great for me to distinguish between internal errors, eg: with my transformers, and external errors, eg: if a user genuinely provided a wrong DTO for an older version.
-Will cover this later though
+The next area I will work on is error handling. I currently have several `TODO` comments across the repository to improve this part. Specifically, I want to distinguish between internal errors (for example, transformer failures) and external errors (for example, a client sending an invalid DTO for an older version).
+
+I will cover that in the next post.
